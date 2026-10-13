@@ -1,0 +1,10 @@
+/* thinktree：从查看器点「编辑」跳过来时，高亮光标所在的那一行。
+   只作用于 frontmatter 里有 `cssclasses: thinktree` 的笔记（thinktree init 建的 Tree.md 自带）。 */
+.thinktree .cm-line.cm-active {
+  background: rgba(var(--color-yellow-rgb), 0.16);
+  border-radius: 4px;
+  animation: thinktree-flash 1.8s ease-out;
+}
+@keyframes thinktree-flash {          /* 刚跳过来时先亮一下再淡到底色 */
+  0%, 35% { background: rgba(var(--color-yellow-rgb), 0.55); }
+}

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thinktree"
+dynamic = ["version"]
+description = "把 Obsidian 里的思考 Tree（Markdown 嵌套列表）变成可交互的思维导图"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []  # 只用标准库
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Environment :: Web Environment",
+]
+
+[project.urls]
+Homepage = "https://github.com/Jiangnan0522/thinktree"
+
+[project.scripts]
+thinktree = "thinktree.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "thinktree.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+thinktree = ["web/*", "templates/*"]

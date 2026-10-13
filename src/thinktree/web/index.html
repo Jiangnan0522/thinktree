@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thinking Tree</title>
+<!--CSS-->
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.js"></script>
+<!--BOOT-->
+</head>
+<body>
+<header id="bar">
+  <a id="homeBtn" href="./" title="所有 tree" hidden><span class="ic ic-doc"></span></a>
+  <div id="title">Thinking Tree</div>
+  <input id="search" type="search" placeholder="搜索  /" autocomplete="off">
+  <div id="filters"></div>
+  <div id="lens"></div>
+  <div id="todo"></div>
+  <label class="ctl">展开
+    <select id="level">
+      <option value="2">2</option><option value="3" selected>3</option>
+      <option value="4">4</option><option value="99">全部</option>
+    </select>
+  </label>
+  <label class="ctl" title="在图上每个节点下显示 why"><input id="showWhy" type="checkbox"> why</label>
+  <label class="ctl"><input id="showConcl" type="checkbox" checked> 结论</label>
+  <button id="fit" title="适应窗口 (f)">⤢</button>
+  <button id="help" title="说明 (?)">?</button>
+  <span id="live" title=""></span>
+</header>
+<main>
+  <section id="home" hidden></section>
+  <svg id="map"></svg>
+  <aside id="panel" hidden>
+    <button id="close" title="关闭 (Esc)">×</button>
+    <div id="panelBody"></div>
+  </aside>
+</main>
+<div id="cal" hidden></div>
+<div id="toast" hidden></div>
+<!--JS-->
+</body>
+</html>
