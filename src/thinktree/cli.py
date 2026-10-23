@@ -85,6 +85,9 @@ EXPLICIT_ID_RE = re.compile(r"^\[(?P<id>[0-9][0-9a-z]*)\]\s*")
 # 节点标记：节点文字里（结论之前）出现这些符号。⭐ = 重要，🚩 = 待办（打算明天 / 接下来几天做）
 MARKS = {"star": ("⭐", re.compile(r"\s*⭐\ufe0f?\s*")), "todo": ("🚩", re.compile(r"\s*🚩\ufe0f?\s*"))}
 TASK_LINE_RE = re.compile(r"^(?P<pre>[ \t]*[-*+]\s+\[.\]\s?)(?P<body>.*)$")
+# 节点类型：标题开头写 "实验：" / "思考："（中英文冒号都行）。解析时去掉前缀，记在 type 里；没写 = ""（未分类）
+NODE_TYPES = {"实验": "exp", "思考": "think"}
+TYPE_RE = re.compile(r"^(?P<k>" + "|".join(map(re.escape, NODE_TYPES)) + r")\s*[:：]\s*")
 TAIL_RE = re.compile(r"\s*((?:[（(][^（）()]*[）)]|↔\s*\[[0-9a-z]+\])\s*)+$")  # 末尾的括号 / ↔ 引用 = 附加说明
 
 
@@ -104,6 +107,12 @@ def pop_mark(t: str, mark: str) -> Tuple[str, bool]:
     if not rx.search(head):
         return t, False
     return (rx.sub(" ", head).strip() + (" " + tail if tail else "")).strip(), True
+
+
+def pop_type(title: str) -> Tuple[str, str]:
+    """"实验：xxx" → ("xxx", "exp")；没有类型前缀 → (原文, "")。"""
+    m = TYPE_RE.match(title)
+    return (title[m.end():], NODE_TYPES[m.group("k")]) if m else (title, "")
 
 
 def split_node_text(t: str) -> Tuple[Optional[str], str, str, str]:
@@ -182,7 +191,7 @@ def parse(text: str) -> dict:
             "id": nid, "kind": kind, "status": status, "title": title,
             "conclusion": conclusion, "extra": extra, "details": [], "why": "", "why_items": [],
             "parent": parent, "children": [], "refs": [], "backrefs": [], "line": line,
-            "legacy_details": False, "has_note": False, "syntax": "", "star": False, "todo": False,
+            "legacy_details": False, "has_note": False, "syntax": "", "star": False, "todo": False, "type": "",
         }
         if parent:
             nodes[parent]["children"].append(nid)
@@ -252,12 +261,13 @@ def parse(text: str) -> dict:
             body, star = pop_mark(tm.group("rest") or "", "star")
             body, todo = pop_mark(body, "todo")
             nid, title, extra, conclusion = split_node_text(body)
+            title, ntype = pop_type(title)
             title = title or "（未命名）"
             k = sum(1 for c in nodes[owner]["children"] if nodes[c]["kind"] == "node") + 1
             nid = nid or auto_id(owner, nodes[owner]["kind"], k)
             nid = new_node(nid, "node", title, owner, ln_no, TASK_STATUS.get(tm.group("ch"), "open"), conclusion, extra)
             nodes[nid]["syntax"] = "task"
-            nodes[nid]["star"], nodes[nid]["todo"] = star, todo
+            nodes[nid]["star"], nodes[nid]["todo"], nodes[nid]["type"] = star, todo, ntype
             stack.append((lvl, "node", nid, 0))
             continue
 
@@ -721,7 +731,7 @@ def track_edits(path: Path, data: dict, mtime: float, seed=None) -> Optional[flo
             todo_since = (old.get(u, {}).get("todo_since") or mtime) if n["todo"] else None
             snap[u] = {"parent": m[n["parent"]], "title": n["title"], "status": n["status"], "text": base,
                        "edited": edited, "created": created, "days": days, "todo_since": todo_since}
-            n.update(edited=edited, created=created, days=days, todo_since=todo_since)
+            n.update(uid=u, edited=edited, created=created, days=days, todo_since=todo_since)
         since = mtime if fresh else h["since"]
         if fresh or snap != old or h.get("path") != str(path):
             HISTORY_DIR.mkdir(parents=True, exist_ok=True)

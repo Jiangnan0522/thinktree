@@ -3,6 +3,7 @@
   "use strict";
   const { Markmap } = window.markmap;
   const STATUS = { open: "进行中", done: "已定", rejected: "否决", parked: "搁置" };
+  const KIND = { exp: "实验", think: "思考" };  // 节点类型：Tree.md 里标题开头写 "实验：" / "思考："
   const PALETTE = ["#6366f1", "#0d9488", "#e07a1f", "#db2777", "#7c3aed", "#0284c7"];
   // 自绘状态图标（Tree.md 里仍然写 emoji，显示时替换）
   const ICON = {
@@ -16,6 +17,8 @@
     cal: '<svg viewBox="0 0 16 16"><rect x="2.2" y="3.2" width="11.6" height="10.6" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2.2 6.6h11.6M5.4 1.8v2.6M10.6 1.8v2.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
     star: '<svg viewBox="0 0 16 16"><path d="M8 1.6l1.95 4.1 4.45.55-3.27 3.08.85 4.42L8 11.55l-3.98 2.2.85-4.42L1.6 6.25l4.45-.55z" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>',
     flag: '<svg viewBox="0 0 16 16"><path d="M3.6 14.6V1.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4.2 2.5h8.3l-2 3.3 2 3.3H4.2z" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg>',
+    exp: '<svg viewBox="0 0 16 16"><path d="M6.2 1.9h3.6M6.7 2v4.3L2.9 12.7a1.1 1.1 0 0 0 .95 1.6h8.3a1.1 1.1 0 0 0 .95-1.6L9.3 6.3V2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.6 10.2h6.8l1.1 2.4a.6.6 0 0 1-.55.85H4.05a.6.6 0 0 1-.55-.85z" fill="currentColor"/></svg>',
+    think: '<svg viewBox="0 0 16 16"><path d="M8 2.2c-3.3 0-5.8 2-5.8 4.6 0 1.6 1 3 2.6 3.8l-.5 2.3 2.6-1.6c.36.05.73.08 1.1.08 3.3 0 5.8-2 5.8-4.6S11.3 2.2 8 2.2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="5.6" cy="6.8" r=".9" fill="currentColor"/><circle cx="8" cy="6.8" r=".9" fill="currentColor"/><circle cx="10.4" cy="6.8" r=".9" fill="currentColor"/></svg>',
     doc: '<svg viewBox="0 0 16 16"><path d="M4 1.8h5.1L12.4 5v9.2H4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9 1.9v3.3h3.3M6.1 8.3h4.3M6.1 10.8h4.3" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
   };
   const ico = (k) => `<span class="ic ic-${k}">${ICON[k]}</span>`;
@@ -28,7 +31,7 @@
   const setHash = (h) => { try { history.replaceState(null, "", h); } catch {} };  // file:// 下浏览器不让改
 
   const st = {
-    data: null, mm: null, sel: null, items: new Map(), folds: new Map(),
+    data: null, mm: null, sel: null, items: new Map(), saved: {},
     statuses: new Set(Object.keys(STATUS)), q: "", level: 3, concl: true, mtime: 0,
   };
 
@@ -42,6 +45,7 @@
   st.whyMap = pref.get("whyMap", false);
   st.statuses = new Set(pref.get("statuses", Object.keys(STATUS)));
   st.recent = pref.get("recent", false);
+  st.kind = pref.get("kind", "");  // 类型透镜："" 全部 / "exp" / "think"
   st.lensMode = pref.get("lensMode", pref.get("recentDays", 7));  // 3 / 7 / 14 / "custom"
   st.lensRange = pref.get("lensRange", null);  // 自定义范围 { from, to }（"YYYY-MM-DD"）
   st.calAnchor = null;  // 日历上点了起点、还没点终点
@@ -96,9 +100,26 @@
 
   // ------------------------------------------------------------ 树 → markmap 数据
   const N = () => st.data.nodes;
-  const matches = (n) => !st.q || [n.id, n.title, n.conclusion, n.extra, ...n.details.map((d) => d[1])]
+  const matches = (n) => !st.q || [n.id, KIND[n.type] || "", n.title, n.conclusion, n.extra, ...n.details.map((d) => d[1])]
     .join(" ").toLowerCase().includes(st.q.toLowerCase());
   const filtering = () => !!st.q || st.statuses.size < Object.keys(STATUS).length;
+
+  // ------------------------------------------------------------ 折叠状态：每个 tree、每种筛选组合（状态 × 类型 × 最近编辑）各记一份，存本机
+  // 按节点的 uid（编辑历史里的稳定编号）记，插入节点、编号整体后移也还对得上；没折叠 / 展开过的节点用默认值
+  const FOLD_KEY = "folds:" + (TREE_PATH || "static");
+  const uidOf = (id) => (N()[id] && N()[id].uid) || id;
+  function viewKey() {
+    const allSt = st.statuses.size === Object.keys(STATUS).length;
+    return [allSt ? "" : [...st.statuses].sort().join(","), st.kind, st.recent ? st.lensMode : ""].join("|");
+  }
+  const savedFolds = () => pref.get(FOLD_KEY, {})[viewKey()] || {};
+  function saveFolds() {
+    if (!st.mm || !st.mm.state.data || st.q) return;  // 搜索时的临时展开不记
+    const f = {};
+    walk(st.mm.state.data, (it) => { if (it.children && it.children.length) f[uidOf(it.payload.tid)] = it.payload.fold ? 1 : 0; });
+    const all = pref.get(FOLD_KEY, {}); all[viewKey()] = f; pref.set(FOLD_KEY, all);
+  }
+  function resetFolds() { const all = pref.get(FOLD_KEY, {}); delete all[viewKey()]; pref.set(FOLD_KEY, all); }
 
   // ------------------------------------------------------------ 「最近编辑」透镜：选定日期范围内编辑过的节点高亮，它们的祖先正常，其余变暗（不隐藏）
   const RECENT_DAYS = [3, 7, 14];
@@ -114,21 +135,26 @@
     return { from: dayStr(daysAgo(n - 1)), to: dayStr(daysAgo(0)) };
   }
   let lensCache = null;
-  /** 范围内编辑过的节点（todo 模式：标了 🚩 的节点）= hot，和它们的上级 = path */
-  function lens(r = lensRange()) {
-    const key = r.todo ? "todo" : `${r.from}|${r.to}`;
+  /** 透镜开着：最近编辑 / 待办（st.recent）或类型（st.kind），两者可以叠加 */
+  const lensOn = () => st.recent || !!st.kind;
+  /** 符合条件的节点 = hot，和它们的上级 = path。条件 = 范围内编辑过（todo 模式：标了 🚩；r 为 null：不限）且类型对得上 */
+  function lens(r = st.recent ? lensRange() : null, kind = st.kind) {
+    const key = (!r ? "all" : r.todo ? "todo" : `${r.from}|${r.to}`) + "|" + kind;
     if (lensCache && lensCache.data === st.data && lensCache.key === key) return lensCache;
     const hot = new Set(), path = new Set();
     for (const n of Object.values(N())) {
-      if (n.kind !== "node" || !(r.todo ? n.todo : (n.days || []).some((d) => d >= r.from && d <= r.to))) continue;
+      if (n.kind !== "node" || (kind && n.type !== kind)) continue;
+      if (r && !(r.todo ? n.todo : (n.days || []).some((d) => d >= r.from && d <= r.to))) continue;
       hot.add(n.id);
       for (let p = n.parent; p; p = N()[p].parent) path.add(p);
     }
     return (lensCache = { data: st.data, key, hot, path });
   }
+  /** 透镜样式：只开类型透镜时命中的节点不加"最近编辑"的高亮，淡化其余节点就够了 */
+  const lensCls = (id) => { const l = lensOf(id); return !l || l === "path" || (l === "hot" && !st.recent) ? "" : " r-" + l; };
   const mmdd = (ts) => { const d = new Date(ts * 1000); return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
   /** 节点在透镜下的档位：hot / path / dim；透镜关着返回 "" */
-  const lensOf = (id) => !st.recent || id === "root" ? "" : lens().hot.has(id) ? "hot" : lens().path.has(id) ? "path" : "dim";
+  const lensOf = (id) => !lensOn() || id === "root" ? "" : lens().hot.has(id) ? "hot" : lens().path.has(id) ? "path" : "dim";
 
   /** "标题（09-20 ~ 10-02）" → ["标题", "09-20 ~ 10-02"]：括号里含数字才当日期 */
   function splitDate(t) {
@@ -145,16 +171,18 @@
     }
     if (n.kind === "section") {
       const [t, date] = splitDate(n.title);
-      return `<div class="tn sec${lensOf(n.id) ? " r-" + lensOf(n.id) : ""}" data-tid="${n.id}" style="--c:${secColor(sec)}">` +
+      return `<div class="tn sec${lensCls(n.id)}" data-tid="${n.id}" style="--c:${secColor(sec)}">` +
         `${/^s\d+$/.test(n.id) ? "" : `<span class="sec-id">${esc(n.id)}</span>`}<span class="sec-t">${inline(t)}</span>` +
         `${date ? `<span class="date">${esc(date)}</span>` : ""}</div>`;
     }
     const hit = st.q && matches(n) ? " hit" : "";
     const s = STATUS[n.status] ? n.status : "none";
     const tip = n.why ? ` title="why: ${esc(whyText(n))}"` : "";
-    const r = lensOf(n.id) ? " r-" + lensOf(n.id) : "";
-    const box = `<div class="tn node st-${s}${hit}${r}" data-tid="${n.id}"${tip}>` +
+    const r = lensCls(n.id);
+    const k = KIND[n.type] ? ` k-${n.type}` : "";
+    const box = `<div class="tn node st-${s}${hit}${r}${k}" data-tid="${n.id}"${tip}>` +
       `<span class="tag" title="${STATUS[s] || ""}">${STATUS[s] ? ico(s) : ""}<span>${esc(n.id)}</span></span>` +
+      `${n.type === "exp" ? `<span class="kd" title="实验">${ico("exp")}</span>` : ""}` +
       `<span class="tt">${inline(n.title)}</span>${n.extra ? `<span class="ex">${inline(n.extra)}</span>` : ""}` +
       `${st.whyMap && n.why ? `<div class="wy"><span class="wy-l">why</span>${inline(n.why)}</div>` : ""}` +
       `${st.concl && n.conclusion ? `<div class="cc">${inline(n.conclusion)}</div>` : ""}</div>`;
@@ -168,21 +196,17 @@
     const kids = n.children.map((c, i) => build(c, depth + 1, n.kind === "root" ? i : sec)).filter(Boolean);
     if (n.kind === "node" && !(st.statuses.has(n.status) && matches(n)) && !kids.length) return null;
     if (n.kind === "section" && !kids.length && filtering()) return null;
-    let fold = st.folds.has(id) ? st.folds.get(id) : depth >= st.level ? 1 : 0;
-    if (filtering() && kids.length) fold = 0;  // 搜索 / 筛选时展开到所有匹配
-    if (st.recent && lens().path.has(id)) fold = 0;  // 透镜：展开到最近编辑的节点（自己也编辑过的上级同样要展开）
+    let fold = depth >= st.level ? 1 : 0;
+    if (filtering() || (lensOn() && lens().path.has(id))) fold = 0;  // 筛选 / 透镜：默认展开到所有匹配的节点
+    const saved = st.saved[uidOf(id)];
+    if (saved !== undefined && !st.q) fold = saved;  // 在这个筛选下手动折叠 / 展开过就照记下的来；搜索时总是全展开
     return { content: content(n, sec), children: kids, payload: { tid: id, sec, fold: kids.length ? fold : 0 } };
   }
 
   function walk(item, fn) { fn(item); (item.children || []).forEach((c) => walk(c, fn)); }
 
-  function harvestFolds() {
-    if (!st.mm || !st.mm.state.data || filtering() || st.recent) return;  // 搜索 / 筛选 / 透镜时的临时展开不记
-    walk(st.mm.state.data, (it) => { if (it.children && it.children.length) st.folds.set(it.payload.tid, it.payload.fold ? 1 : 0); });
-  }
-
-  async function render(fit, keepFolds) {
-    if (!keepFolds) harvestFolds();
+  async function render(fit) {
+    st.saved = savedFolds();
     const root = build("root", 1, 0) || { content: "（没有匹配的节点）", children: [], payload: { tid: "root" } };
     if (!st.mm) {
       st.mm = Markmap.create("#map", {
@@ -191,6 +215,8 @@
         lineWidth: (it) => ({ 1: 3, 2: 2.6, 3: 1.8 }[it.state.depth] || 1.3),
         duration: 350, maxWidth: 400, initialExpandLevel: -1, spacingVertical: 9, spacingHorizontal: 64, fitRatio: 0.98, paddingX: 10,
       });
+      const toggle = st.mm.toggleNode.bind(st.mm);  // 点小圆点折叠 / 展开后记下来
+      st.mm.toggleNode = async (d, recursive) => { await toggle(d, recursive); saveFolds(); };
     }
     await st.mm.setData(root);
     st.items.clear();
@@ -219,7 +245,7 @@
         const it = st.items.get(p);
         if (it && it.payload.fold) { it.payload = { ...it.payload, fold: 0 }; changed = true; }
       }
-      if (changed) await st.mm.renderData();
+      if (changed) { await st.mm.renderData(); saveFolds(); }
     }
     renderPanel(id);
     markSelected();
@@ -230,6 +256,7 @@
 
   function nodeLine(n) {
     return `<span class="nl st-${n.status}">${STATUS[n.status] ? ico(n.status) : ""}<a class="ref" data-ref="${n.id}">${esc(n.id)}</a> ` +
+      `${KIND[n.type] ? `<span class="nl-kd k-${n.type}" title="${KIND[n.type]}">${ICON[n.type]}</span>` : ""}` +
       `<span class="tt">${inline(n.title)}</span>${n.todo ? `<span class="nl-mk flag">${ICON.flag}</span>` : ""}${n.star ? `<span class="nl-mk star">${ICON.star}</span>` : ""}</span>` +
       (n.conclusion ? `<div class="nl-cc">${inline(n.conclusion)}</div>` : "");
   }
@@ -245,6 +272,7 @@
     const [title, secDate] = n.kind === "section" ? splitDate(n.title) : [n.title, ""];
     const date = exDate || secDate;
     if (n.kind !== "root") h += `<div class="badges">${STATUS[n.status] ? `<span class="badge ${n.status}">${ico(n.status)}${STATUS[n.status]}</span>` : ""}` +
+      `${KIND[n.type] ? `<span class="badge kb k-${n.type}">${ico(n.type)}${KIND[n.type]}</span>` : ""}` +
       `<span class="pid">${esc(n.id)}</span>${date ? `<span class="date">${esc(date)}</span>` : ""}` +
       `${n.todo && n.todo_since ? `<span class="todo-since">${ICON.flag}标为待办 ${ago(n.todo_since)}</span>` : ""}` +
       `${n.edited ? `<span class="edited" title="${esc(new Date(n.edited * 1000).toLocaleString())}">${ico("clock")}最后编辑 ${ago(n.edited)} · ${mmdd(n.edited)}</span>` : ""}</div>`;
@@ -356,7 +384,8 @@
       <li>拖动 / 滚轮：平移；⌘ + 滚轮 / 双指：缩放</li>
       <li>键盘：<code>/</code> 搜索 · <code>f</code> 适应窗口 · <code>?</code> 说明 · <code>Esc</code> 关闭</li>
       <li>选中节点后：<code>a</code> 加子问题 · <code>s</code> 加同级 · <code>e</code> 在 Obsidian 里编辑（跳到这一行需要 Obsidian 装 Advanced URI 插件）· <code>x</code> 加星 / 取消（⭐）· <code>t</code> 待办 / 取消（🚩，工具栏「待办」只看这些）</li>
-      <li><code>r</code> / 工具栏「最近编辑」下拉（3 / 7 / 14 天），或点旁边的日历选任意一段日期：高亮这段时间编辑过的节点，它们的上级正常显示，其余变暗；侧边栏显示每个节点的最后编辑时间</li></ul></div>`;
+      <li><code>r</code> / 工具栏「最近编辑」下拉（3 / 7 / 14 天），或点旁边的日历选任意一段日期：高亮这段时间编辑过的节点，它们的上级正常显示，其余变暗；侧边栏显示每个节点的最后编辑时间</li>
+      <li>节点类型：标题开头写 <code>实验：</code> 或 <code>思考：</code>（中英文冒号都行）。工具栏「全部 / 实验 / 思考」或 <code>k</code>：只看一类，其余变暗、上级照常显示，能看出脉络；可以和「最近编辑」叠加</li></ul></div>`;
     h += `<h3>检查结果（${iss.length}）</h3>` + (iss.length
       ? `<ul class="issues">${iss.map((i) => `<li class="${i.level}">第 ${i.line} 行：${esc(i.msg)}</li>`).join("")}</ul>`
       : `<div>没有问题</div>`);
@@ -379,6 +408,10 @@
     const todoOn = st.recent && st.lensMode === "todo";
     const nTodo = Object.values(N()).filter((n) => n.kind === "node" && n.todo).length;
     $("#todo").innerHTML = `<button class="chip todo ${todoOn ? "" : "off"}${nTodo ? " has" : ""}" title="只看标了 🚩 的待办节点，其余变暗">${ico("flag")}<span class="lb">待办</span><span class="n">${nTodo}</span></button>`;
+    const nk = (k) => Object.values(N()).filter((n) => n.kind === "node" && n.type === k).length;
+    $("#kind").innerHTML = `<button class="chip${st.kind ? " off" : ""}" data-k="" title="不按类型筛选">全部</button>` +
+      Object.entries(KIND).map(([k, lb]) => `<button class="chip k-${k}${st.kind === k ? " on" : " off"}" data-k="${k}" ` +
+        `title="只看${lb}节点：其余变暗，上级保持原样，看得出脉络（k 切换）">${ico(k)}<span class="lb">${lb}</span><span class="n">${nk(k)}</span></button>`).join("");
     const cur = st.recent && !todoOn ? String(st.lensMode) : "0";
     const cr = st.lensRange;
     $("#lens").className = st.recent && !todoOn ? "" : "off";
@@ -395,24 +428,32 @@
 
   /** mode = 0 关闭透镜；3 / 7 / 14 = 近 N 天；"custom" = range。r 键在关和上次的模式之间切换 */
   function setLens(mode, range) {
-    if (!st.recent) harvestFolds();  // 打开前记下当前折叠，关掉时恢复
     st.recent = !!mode;
     if (mode) st.lensMode = mode;
     if (range) st.lensRange = range;
     pref.set("recent", st.recent); pref.set("lensMode", st.lensMode); pref.set("lensRange", st.lensRange);
-    drawFilters(); render(false, true);
+    drawFilters(); render(false);
     if (st.recent && !lens().hot.size && st.lensMode === "todo") toast("还没有待办节点：选中节点后按 t 或点「待办」");
     else if (st.recent && !lens().hot.size) {
       const since = st.data.meta.history_since;
-      toast(`这段时间没有编辑记录${since ? `（${new Date(since * 1000).toLocaleDateString()} 开始记录）` : ""}`);
+      toast(st.kind ? `这段时间没有编辑过的${KIND[st.kind]}节点`
+        : `这段时间没有编辑记录${since ? `（${new Date(since * 1000).toLocaleDateString()} 开始记录）` : ""}`);
     }
+  }
+
+  /** 类型透镜："" 关 / "exp" / "think"；和最近编辑 / 待办叠加 */
+  function setKind(k) {
+    st.kind = k; pref.set("kind", k);
+    drawFilters(); render(false);
+    if (k && !lens().hot.size) toast(st.recent ? `这个范围里没有${KIND[k]}节点`
+      : `还没有${KIND[k]}节点：在 Tree.md 里把节点写成「- [ ] ${KIND[k]}：标题」`);
   }
 
   // ------------------------------------------------------------ 编辑日历：过去两周每天编辑过几个节点，像订酒店一样点起点、终点选范围
   function drawCal() {
     const cnt = {}, fresh = {};
     for (const n of Object.values(N())) {
-      if (n.kind !== "node") continue;
+      if (n.kind !== "node" || (st.kind && n.type !== st.kind)) continue;
       const c = n.created ? dayStr(new Date(n.created * 1000)) : "";
       for (const d of n.days || []) { cnt[d] = (cnt[d] || 0) + 1; if (d === c) fresh[d] = (fresh[d] || 0) + 1; }
     }
@@ -517,6 +558,10 @@
       const v = e.target.value; setLens(v === "custom" ? "custom" : +v); e.target.blur();
     });
     $("#lens").addEventListener("click", (e) => { if (e.target.closest("#calBtn")) toggleCal(); });
+    $("#kind").addEventListener("click", (e) => {
+      const b = e.target.closest(".chip"); if (!b) return;
+      setKind(b.dataset.k === st.kind ? "" : b.dataset.k);
+    });
     $("#todo").addEventListener("click", () => setLens(st.recent && st.lensMode === "todo" ? 0 : "todo"));
     $("#cal").addEventListener("click", (e) => {
       const b = e.target.closest(".cd[data-d]"); if (!b) return;
@@ -534,7 +579,7 @@
       if (!$("#cal").hidden && !e.target.closest("#cal, #lens")) toggleCal(false);
     });
     const lv = $("#level"); lv.value = String(st.level);
-    lv.onchange = () => { st.level = +lv.value; pref.set("level", st.level); st.folds.clear(); render(true); };
+    lv.onchange = () => { st.level = +lv.value; pref.set("level", st.level); resetFolds(); render(true); };
     const sw = $("#showWhy"); sw.checked = st.whyMap;
     sw.onchange = () => { st.whyMap = sw.checked; pref.set("whyMap", st.whyMap); render(false); };
     const sc = $("#showConcl"); sc.checked = st.concl;
@@ -560,6 +605,7 @@
       else if (e.key === "f") st.mm.fit();
       else if (e.key === "?") renderHelp();
       else if (e.key === "r" && !e.metaKey && !e.ctrlKey) setLens(st.recent ? 0 : st.lensMode);
+      else if (e.key === "k" && !e.metaKey && !e.ctrlKey) setKind({ "": "exp", exp: "think", think: "" }[st.kind]);
       else if (st.sel && !$("#panel").hidden && canEdit() && !e.metaKey && !e.ctrlKey) {
         const w = { a: "child", s: "after", e: "edit", x: "star", t: "todo" }[e.key];
         if (w) { e.preventDefault(); act(w); }
